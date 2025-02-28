@@ -1,14 +1,96 @@
+use std::sync::mpsc::Receiver;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
+pub mod advanced_features;
 pub mod closed_iter;
+pub mod collect;
+pub mod concurrent;
+pub mod enum_match;
 pub mod guess;
 pub mod hello_world;
 pub mod ownership;
-pub mod struct_def;
-pub mod enum_match;
 pub mod package_crate_use;
-pub mod pub_use;
-pub mod collect;
 pub mod panic;
+pub mod pub_use;
+pub mod smart_point;
+pub mod struct_def;
 pub mod type_trait_life;
+
+struct Worker {
+    id: usize,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new(id: usize, receiver: Arc<Mutex<Receiver<Job>>>) -> Worker {
+        let thread = thread::spawn(move || loop {
+            let message = receiver.lock().unwrap().recv();
+
+            match message {
+                Ok(job) => {
+                    println!("Worker {id} got a job; executing.");
+
+                    job();
+                }
+                Err(_) => {
+                    println!("Worker {id} disconnected; shutting down.");
+                    break;
+                }
+            }
+        });
+
+        Worker {
+            id,
+            thread: Some(thread),
+        }
+    }
+}
+
+pub struct ThreadPool {
+    workers: Vec<Worker>,
+    sender: Option<mpsc::Sender<Job>>,
+}
+// struct Job;
+
+type Job = Box<dyn FnOnce() + Send + 'static>;
+impl ThreadPool {
+    pub fn new(size: usize) -> ThreadPool {
+        assert!(size > 0);
+        let (sender, receiver) = mpsc::channel();
+        let receiver = Arc::new(Mutex::new(receiver));
+        let mut workers = Vec::with_capacity(size);
+
+        for id in 0..size {
+            workers.push(Worker::new(id, Arc::clone(&receiver)));
+        }
+
+        ThreadPool { workers, sender: Some(sender) }
+    }
+
+    //闭包作为参数时可以使用三个不同的 trait：Fn、FnMut 和 FnOnce。
+    pub fn execute<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        let job = Box::new(f);
+
+        self.sender.as_ref().unwrap().send(job).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        for worker in &mut self.workers {
+            println!("Shutting down worker {}", worker.id);
+            // 如果 Worker 存放的是 Option<thread::JoinHandle<()>，就可以在 Option 上调用 take 方法将值从 Some 成员中移动出来而对 None 成员不做处理。
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+}
 
 pub mod unit_test {
     fn add(a: i32, b: i32) -> i32 {
@@ -126,7 +208,6 @@ pub mod base_theory {
             let heart_eyed_cat = '😻';
             println!("c = {}, z = {}, heart_eyed_cat = {}", c, z, heart_eyed_cat);
 
-
             // 复合类型: Rust 有两个原生的复合类型：元组（tuple）和数组（array）。
             // 元组类型
             // 元组是一个将多个其他类型的值组合进一个复合类型的主要方式。元组长度固定：一旦声明，其长度不会增大或缩小。
@@ -137,7 +218,10 @@ pub mod base_theory {
             let (x, y, z, b) = tup;
             println!("x = {}, y = {}, z = {},b = {}", x, y, z, b);
             // 也可以使用点号（.）后跟值的索引来直接访问它们。
-            println!("tup.0 = {}, tup.1 = {}, tup.2 = {}, tup.3 = {}", tup.0, tup.1, tup.2, tup.3);
+            println!(
+                "tup.0 = {}, tup.1 = {}, tup.2 = {}, tup.3 = {}",
+                tup.0, tup.1, tup.2, tup.3
+            );
 
             // 数组类型
             // 数组中的每个元素的类型必须相同。
@@ -147,11 +231,17 @@ pub mod base_theory {
             // 使用索引来访问数组的元素
             // 注意：索引越界
             let arr: [u32; 5] = [1, 2, 3, 4, 5];
-            println!("arr[0] = {}, arr[1] = {}, arr[2] = {}, arr[3] = {}, arr[4] = {}", arr[0], arr[1], arr[2], arr[3], arr[4]);
+            println!(
+                "arr[0] = {}, arr[1] = {}, arr[2] = {}, arr[3] = {}, arr[4] = {}",
+                arr[0], arr[1], arr[2], arr[3], arr[4]
+            );
             // println!("arr = {:?}", arr);
             // 在方括号中指定初始值加分号再加元素个数的方式来创建一个每个元素都为相同值的数组
             let arr2 = [3; 5];
-            println!("arr2[0] = {}, arr2[1] = {}, arr2[2] = {}, arr2[3] = {}, arr2[4] = {}", arr2[0], arr2[1], arr2[2], arr2[3], arr2[4]);
+            println!(
+                "arr2[0] = {}, arr2[1] = {}, arr2[2] = {}, arr2[3] = {}, arr2[4] = {}",
+                arr2[0], arr2[1], arr2[2], arr2[3], arr2[4]
+            );
             // println!("arr2 = {:?}", arr2);
         }
 
@@ -213,7 +303,6 @@ pub mod base_theory {
             println!("x = {}", x);
         }
 
-
         /// 返回值
         pub fn return_function(a: i32) -> i32 {
             // 函数返回值
@@ -252,7 +341,6 @@ pub mod base_theory {
             println!("The value of number is: {number}");
         }
 
-
         /// 循环
         pub fn control_loops() {
             // 循环
@@ -277,7 +365,9 @@ pub mod base_theory {
             // 使用 break 关键字返回值 counter * 2。循环之后，我们通过分号结束赋值给 result 的语句。
             let mut counter = 0;
             let result = loop {
-                if counter == 5 { break counter * 2; }
+                if counter == 5 {
+                    break counter * 2;
+                }
                 counter += 1
             };
             println!("result = {}", result);
@@ -286,21 +376,23 @@ pub mod base_theory {
             // 如果存在嵌套循环，break 和 continue 应用于此时最内层的循环。
             // 你可以选择在一个循环上指定一个 循环标签（loop label），然后将标签与 break 或 continue 一起使用，使这些关键字应用于已标记的循环而不是最内层的循环。
 
-
             let mut count = 0;
             'loop1: loop {
                 println!("count = {}", count);
                 let mut inner_count = 10;
                 'loop2: loop {
                     println!("inner_count = {}", inner_count);
-                    if inner_count == 9 { break; }
-                    if count == 2 { break 'loop1; }
+                    if inner_count == 9 {
+                        break;
+                    }
+                    if count == 2 {
+                        break 'loop1;
+                    }
                     inner_count -= 1;
                 }
                 count += 1;
             }
         }
-
 
         /// while 循环
         pub fn control_while() {
