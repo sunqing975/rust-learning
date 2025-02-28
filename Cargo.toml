@@ -1,0 +1,16 @@
+[package]
+name = "rust-learning"
+version = "0.1.0"
+edition = "2021"
+description = "Rust learning"
+authors = ["SUN"]
+license = "MIT"
+
+[dependencies]
+rand = "0.9.0"
+trpl = "0.2.0"
+
+hello_macro = { path = "../hello_macro" }
+hello_macro_derive = { path = "../hello_macro/hello_macro_derive" }
+futures = { version = "0.3.31", features = ["thread-pool"] }
+
